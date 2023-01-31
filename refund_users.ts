@@ -13,7 +13,7 @@ interface Users {
     mangoAccountPks: string,
 }
 
-export async function main(users: Users[]) {
+export async function main(users: Users[], amount: number) {
     // cluster should be in 'devnet' | 'mainnet' | 'localnet' | 'testnet'  
     const endpoint = process.env.ENDPOINT_URL || 'http://localhost:8899';
     const connection = new Connection(endpoint, 'confirmed');
@@ -25,28 +25,53 @@ export async function main(users: Users[]) {
           ),
         ),
       );
-    let promises : Promise<String>[]= []
-    let blockHash = await connection.getLatestBlockhash();
-    for (const user of users) {
-        let userPubkey = new web3.PublicKey(user.publicKey)
-        const ix = SystemProgram.transfer({
-            fromPubkey: authority.publicKey,
-            lamports: LAMPORTS_PER_SOL,
-            toPubkey: userPubkey,
-        })
-        let tx = new web3.Transaction().add(ix);
-        tx.recentBlockhash = blockHash.blockhash;
-        promises.push(connection.sendTransaction(tx, [authority]))
+
+    const n_try = 5;
+    const target_balance = 0.01; 
+    let accounts_to_fund = new Set();
+    for (let i = 0; i < n_try; i++) {
+        // add all accounts which have balance less than threshold to set
+        {
+        let promises : Promise<String>[]= []
+        for (let cur_account of Users) {
+            promises.push(connection.get_balance(cur_account.publicKey));
+        }
+        const balance = await Promise.all(promises);
+        Users.forEach( (cur_account, index) =>  {
+            console.log(balance[index]);
+            if (balance[index] < target_balance) {
+                accounts_to_fund.add(cur_account);
+            }
+        });
+        }
+        return;
+        {
+        let promises : Promise<String>[]= []
+        let blockHash = await connection.getLatestBlockhash();
+        for (const user of users) {
+            let userPubkey = new web3.PublicKey(user.publicKey)
+            const ix = SystemProgram.transfer({
+                fromPubkey: authority.publicKey,
+                lamports: LAMPORTS_PER_SOL * amount,
+                toPubkey: userPubkey,
+            })
+            let tx = new web3.Transaction().add(ix);
+            tx.recentBlockhash = blockHash.blockhash;
+            promises.push(connection.sendTransaction(tx, [authority]))
+        }
+        const result = await Promise.all(promises);
+        }
+        accounts_to_fund.clear();
     }
-    await Promise.all(promises)
 }
+const amount = process.env.REFUND_AMOUNT_SOL || '1.0';
 const file = readFileSync(fileName, 'utf-8');
 const users : Users[] = JSON.parse(file);
 if (users === undefined) {
     console.log("cannot read users list")
 }
-console.log('refunding 1 sol to ' + users.length + " users")
-main(users).then(x => {
+console.log('refunding ' + amount + ' sol to ' + users.length + ' users')
+main(users, amount).then(x => {
     console.log('finished sucessfully')
 }).catch(e => {
     console.log('caught an error : ' + e)
